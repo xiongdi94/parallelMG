@@ -32,7 +32,8 @@ object streamCount {
 //    env.getConfig.setGlobalJobParameters(params)
 
     // get input data
-    val text =env.readTextFile(inputFilePath)
+//    val text =env.readTextFile(inputFilePath)
+    val text = env.socketTextStream("localhost", 9999)
 
     val k = 10000
     val threshold = 0
@@ -46,11 +47,10 @@ object streamCount {
       .filter(_.nonEmpty)
       .map((_, 1))
       // group by the tuple field "0" and sum up tuple field "1"
-
-
       .keyBy(0)
-//      .window(TumblingEventTimeWindows.of(Time.seconds(5)))
-//      .sum(1)
+      .timeWindow(Time.seconds(3))
+      .sum(1)
+      .keyBy(0)
       .mapWithState((in: (String, Int), count: Option[Int]) =>
         count match {
           case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
@@ -59,7 +59,7 @@ object streamCount {
 
 
     // emit result
-    counts.writeAsText(outputFilePath)
+//    counts.writeAsText(outputFilePath)
     counts.print()
 
 
