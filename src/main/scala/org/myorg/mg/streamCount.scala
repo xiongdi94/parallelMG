@@ -25,7 +25,7 @@ import scala.collection.immutable.StringOps
 import scala.util.hashing.Hashing
 import org.apache.flink.api.scala.typeutils;
 
-class CountWindowAverage extends RichFlatMapFunction[(String, Int, Int), (String, Int)] {
+class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String, Int)] {
 
   private var sum:MapState[String, Int]=null
 
@@ -107,8 +107,6 @@ object streamCount {
   def main(args: Array[String]) {
 
     // Checking input parameters
-//    val params = ParameterTool.fromArgs(args)
-
     if (args.length != 2) {
       System.err.println("USAGE:\nstreamCount <inputFile> <outputPath>")
       return
@@ -148,7 +146,7 @@ object streamCount {
 //          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
 //          case None => ( (in._1, 0), Some(in._2-threshold) )
 //        })
-      .flatMap(new CountWindowAverage())
+      .flatMap(new CountWindow())
          
 
 
@@ -156,7 +154,6 @@ object streamCount {
       counts.print()
 //    counts.writeAsText(outputFilePath)
 
-    //    counts.broadcast
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
 //    tableEnv.registerTable("table1", table1)
