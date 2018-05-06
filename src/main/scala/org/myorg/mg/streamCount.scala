@@ -4,7 +4,7 @@ import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.api.common.functions.AbstractRichFunction
 import org.apache.flink.api.common.functions._
-import org.apache.flink.api.common.state.{MapState, ValueState, ValueStateDescriptor}
+import org.apache.flink.api.common.state._
 
 import scala.collection.mutable.HashSet
 import scala.collection.Set
@@ -13,6 +13,7 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.runtime.minicluster.FlinkMiniCluster
 import java.net.{InetAddress, ServerSocket, Socket, SocketException}
 
+import org.apache.flink.api.common.state
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.table.api.TableEnvironment
 import org.apache.flink.table.api.Table
@@ -20,43 +21,87 @@ import org.apache.flink.table.sinks.CsvTableSink
 import org.apache.flink.table.sinks.TableSink
 import org.apache.flink.util.Collector
 
-//class mapWithCounter extends RichMapFunction[(String, Long)] {
+import scala.collection.immutable.StringOps
+import scala.util.hashing.Hashing
+import org.apache.flink.api.scala.typeutils;
 
-//  private var sum: ValueState[Long] =_
-//
-//  override def map(input: (String, Long)): Uint= {
-////  override def map
-//
-//    // access the state value
-//    val tmpCurrentSum = sum.value()
-//    // If it hasn't been used before, it will be null
-//    val currentSum = if (tmpCurrentSum != null) {
-//      tmpCurrentSum
-//    } else {
-//      0
-//    }
-//
-//    // update the count
-//    val newSum = currentSum+ input._2
-//
-//    // update the state
-//    sum.update(newSum)
-////    return ( (input._1, input._2), Some(newSum) )
-//
-////     if the count reaches 2, emit the average and clear the state
-////    if (newSum >= 2) {
-////      return Collector.
-//
-////      sum.clear()
-//    }
-//  }
-//
-//  override def open(parameters: Configuration): Unit = {
-//    sum = getRuntimeContext.getState(
-//      new ValueStateDescriptor[Long]("average", createTypeInformation[Long])
-//    )
-//  }
-//}
+class CountWindowAverage extends RichFlatMapFunction[(String, Int, Int), (String, Int)] {
+
+  private var sum:MapState[String, Int]=null
+
+  override def flatMap(input: (String, Int, Int ), out: Collector[(String, Int)]): Unit = {
+    // access the state value
+//    val tmpCurrentSum = sum(input._1)
+
+    // If it hasn't been used before, it will be null
+
+    val currentSum = if (sum.contains(input._1)) {
+      sum.get(input._1)
+
+    } else {
+      0
+    }
+
+    // update the count
+    val newSum = currentSum + input._2
+
+    // update the state
+    sum.remove(input._1)
+    sum.put(input._1,newSum)
+//    it.forEach((k,v)=>print(k))
+
+
+    val k=1000
+    var maxV=0-1
+    var maxK=""
+    var count=1001
+    while(count>k){
+      count=0
+      var i=sum.iterator()
+      while(i.hasNext){
+        i.next()
+        count+=1
+      }
+      i=sum.iterator()
+      if(count>k){
+        while(i.hasNext){
+          val e=i.next
+          if(e.getValue>1){
+            e.setValue(e.getValue-1)
+          }
+          else{
+            i.remove()
+//            print(e.getKey)
+          }
+        }
+      }
+
+    }
+
+    val i=sum.iterator()
+    while(i.hasNext){
+      val e=i.next()
+      if(e.getValue>maxV){
+        maxV = e.getValue
+        maxK = e.getKey
+      }
+    }
+
+
+//    print(count)
+
+    out.collect((maxK,maxV))
+
+
+  }
+
+  override def open(parameters: Configuration): Unit = {
+    sum = getRuntimeContext.getMapState[String,Int](
+      new MapStateDescriptor[String,Int]("count",createTypeInformation[String],createTypeInformation[Int]))
+
+  }
+}
+
 
 object streamCount {
   def main(args: Array[String]) {
@@ -80,38 +125,38 @@ object streamCount {
 
     // get input data
 //    val text =env.readTextFile(inputFilePath)
-//    val ia = InetAddress.getByName("localhost")
-//    val socket = new Socket(ia, 9999)
     val text = env.socketTextStream("localhost", 9999)
 
-    val k = 10000
-    val threshold = 0
+
+    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k)%4))
 
     val counts: DataStream[(String, Int)] = text
 
       // split up the lines in pairs (2-tuples) containing: (word,1)
       .flatMap( _.toLowerCase.split("\\W+"))
       .filter(_.nonEmpty)
-      .map((_, 1))
+
+      .map{(_, 1)}
+      .map{x=>g(x._1,x._2)}
       .keyBy(0)
-      .timeWindow(Time.seconds(1))
+      .timeWindow(Time.seconds(3))
       .sum(1)
-      .keyBy(0)
-      .mapWithState((in: (String, Int), count: Option[Int]) =>
-        count match {
-          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
-          case None => ( (in._1, 0), Some(in._2-threshold) )
-        })
-//      .map(new mapWithCounter())
+
+      .keyBy(_._3)
+//      .mapWithState((in: (String, Int), count: Option[Int]) =>
+//        count match {
+//          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
+//          case None => ( (in._1, 0), Some(in._2-threshold) )
+//        })
+      .flatMap(new CountWindowAverage())
          
 
 
 
-//      .maxBy(1)
-//        .max(10)
+      counts.print()
+//    counts.writeAsText(outputFilePath)
 
-    counts.print()
-//    counts.broadcast
+    //    counts.broadcast
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
 //    tableEnv.registerTable("table1", table1)
@@ -132,9 +177,7 @@ object streamCount {
 //    val dsRow: DataStream[String] = tableEnv.toAppendStream[String](table2)
 //    dsRow.print()
     // emit result
-//    counts.writeAsText(outputFilePath)
-
-
+//    print(Hashing.default.hash("sad"))
 
 
     // execute program
