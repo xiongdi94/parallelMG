@@ -23,38 +23,33 @@ import org.apache.flink.util.Collector
 
 import scala.collection.immutable.StringOps
 import scala.util.hashing.Hashing
-import org.apache.flink.api.scala.typeutils;
+import org.apache.flink.api.scala.typeutils
 
-class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String, Int)] {
+import scala.util.Random;
 
-  private var sum:MapState[String, Int]=null
+class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, Int, Int)]] {
 
-  override def flatMap(input: (String, Int, Int ), out: Collector[(String, Int)]): Unit = {
-    // access the state value
-//    val tmpCurrentSum = sum(input._1)
+  //  sum(Key=>(count,total_decrement))
+  private var sum:MapState[String, (Int, Int)]=null
 
-    // If it hasn't been used before, it will be null
+  override def flatMap(input: (String, Int, Int ), out: Collector[List[(String, Int, Int)]]): Unit = {
 
-    val currentSum = if (sum.contains(input._1)) {
-      sum.get(input._1)
+    //Update map using new input
+    if (sum.contains(input._1)) {
+      val tmp_sum=sum.get(input._1)
+      sum.remove(input._1)
+      sum.put(input._1,(tmp_sum._1+input._2,tmp_sum._2))
 
-    } else {
-      0
+    }
+    else {
+      sum.put(input._1,(input._2,0))
     }
 
-    // update the count
-    val newSum = currentSum + input._2
 
-    // update the state
-    sum.remove(input._1)
-    sum.put(input._1,newSum)
-//    it.forEach((k,v)=>print(k))
+    val k=2500                   //number of items kept in map
+    val frequentThreshold=10000  //judge whether a word is frequent
+    var count=Int.MaxValue
 
-
-    val k=1000
-    var maxV=0-1
-    var maxK=""
-    var count=1001
     while(count>k){
       count=0
       var i=sum.iterator()
@@ -66,38 +61,43 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String, Int)]
       if(count>k){
         while(i.hasNext){
           val e=i.next
-          if(e.getValue>1){
-            e.setValue(e.getValue-1)
+          if(e.getValue._1>1){
+            e.setValue(e.getValue._1-1,e.getValue._2+1)
           }
           else{
             i.remove()
-//            print(e.getKey)
           }
         }
       }
 
     }
-
+    var storedElems: List[(String, Int, Int)]=Nil
     val i=sum.iterator()
     while(i.hasNext){
       val e=i.next()
-      if(e.getValue>maxV){
-        maxV = e.getValue
-        maxK = e.getKey
+
+      //only put enough frequent words into list
+      if(e.getValue._1>frequentThreshold){
+        storedElems=storedElems.::(e.getKey,e.getValue._1,e.getValue._2)
       }
+
     }
 
+    val storedElems_sorted=storedElems.sortBy(_._2)(Ordering[Int].reverse)
 
-//    print(count)
 
-    out.collect((maxK,maxV))
+    //collect top 10 frequent words
+    if(!storedElems_sorted.isEmpty){
+      out.collect(storedElems_sorted.take(10))
+    }
+
 
 
   }
 
   override def open(parameters: Configuration): Unit = {
-    sum = getRuntimeContext.getMapState[String,Int](
-      new MapStateDescriptor[String,Int]("count",createTypeInformation[String],createTypeInformation[Int]))
+    sum = getRuntimeContext.getMapState[String,(Int, Int)](
+      new MapStateDescriptor[String,(Int, Int)]("count",createTypeInformation[String],createTypeInformation[(Int,Int)]))
 
   }
 }
@@ -114,10 +114,11 @@ object streamCount {
 
     val inputFilePath = args(0)
     val outputFilePath= args(1)
+    val numOfParallelism=4
 
     // set up the execution environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-
+    env.setParallelism(numOfParallelism)
     // make parameters available in the web interface
 //    env.getConfig.setGlobalJobParameters(params)
 
@@ -125,34 +126,36 @@ object streamCount {
 //    val text =env.readTextFile(inputFilePath)
     val text = env.socketTextStream("localhost", 9999)
 
+//    val rd=new Random(123)
+    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%(2*numOfParallelism)+2*numOfParallelism+1)
+//    def  g(k:String,v:Int)=Tuple3(k,v,v%4+1)
 
-    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k)%4))
 
-    val counts: DataStream[(String, Int)] = text
-
+    val counts = text
       // split up the lines in pairs (2-tuples) containing: (word,1)
       .flatMap( _.toLowerCase.split("\\W+"))
       .filter(_.nonEmpty)
 
       .map{(_, 1)}
-      .map{x=>g(x._1,x._2)}
+//      .map{x=>g(x._1,x._2)}
       .keyBy(0)
-      .timeWindow(Time.seconds(3))
+      .timeWindow(Time.seconds(1))
       .sum(1)
-
+      .map{x=>g(x._1,x._2)}
       .keyBy(_._3)
-//      .mapWithState((in: (String, Int), count: Option[Int]) =>
-//        count match {
-//          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
-//          case None => ( (in._1, 0), Some(in._2-threshold) )
-//        })
+//////      .mapWithState((in: (String, Int), count: Option[Int]) =>
+//////        count match {
+//////          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
+//////          case None => ( (in._1, 0), Some(in._2-threshold) )
+//////        })
       .flatMap(new CountWindow())
+
          
 
 
 
-      counts.print()
-//    counts.writeAsText(outputFilePath)
+//      counts.print()
+    counts.writeAsText(outputFilePath)
 
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
