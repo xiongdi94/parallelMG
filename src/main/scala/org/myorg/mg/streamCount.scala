@@ -31,6 +31,7 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
   //  sum(Key=>(count,total_decrement))
   private var sum:MapState[String, (Int, Int)]=null
+  private var timeInMillis=System.currentTimeMillis()
 
   override def flatMap(input: (String, Int, Int ), out: Collector[List[(String, Int, Int)]]): Unit = {
 
@@ -47,7 +48,8 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
 
     val k=2500                   //number of items kept in map
-    val frequentThreshold=10000  //judge whether a word is frequent
+    val frequentThreshold=0      //judge whether a word is frequent
+    val time_interval=1000       //time interval for every collection (milliseconds)
     var count=Int.MaxValue
 
     while(count>k){
@@ -71,24 +73,27 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
       }
 
     }
-    var storedElems: List[(String, Int, Int)]=Nil
-    val i=sum.iterator()
-    while(i.hasNext){
-      val e=i.next()
 
-      //only put enough frequent words into list
-      if(e.getValue._1>frequentThreshold){
-        storedElems=storedElems.::(e.getKey,e.getValue._1,e.getValue._2)
+    if( System.currentTimeMillis()-timeInMillis>time_interval) {
+      timeInMillis = System.currentTimeMillis()
+      var storedElems: List[(String, Int, Int)] = Nil
+      val i = sum.iterator()
+      while (i.hasNext) {
+        val e = i.next()
+        //only put enough frequent words into list
+        if (e.getValue._1 > frequentThreshold) {
+          storedElems = storedElems.::(e.getKey, e.getValue._1, e.getValue._2)
+        }
+
       }
 
-    }
-
-    val storedElems_sorted=storedElems.sortBy(_._2)(Ordering[Int].reverse)
+      val storedElems_sorted = storedElems.sortBy(_._2)(Ordering[Int].reverse)
 
 
-    //collect top 10 frequent words
-    if(!storedElems_sorted.isEmpty){
-      out.collect(storedElems_sorted.take(10))
+      //collect top 10 frequent words
+      if (!storedElems_sorted.isEmpty ) {
+        out.collect(storedElems_sorted.take(10))
+      }
     }
 
 
