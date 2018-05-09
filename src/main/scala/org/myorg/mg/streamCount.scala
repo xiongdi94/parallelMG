@@ -25,7 +25,8 @@ import scala.collection.immutable.StringOps
 import scala.util.hashing.Hashing
 import org.apache.flink.api.scala.typeutils
 
-import scala.util.Random;
+import scala.util.Random
+
 
 class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, Int, Int)]] {
 
@@ -92,6 +93,7 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
       //collect top 10 frequent words
       if (!storedElems_sorted.isEmpty ) {
+        print(input._3)
         out.collect(storedElems_sorted.take(10))
       }
     }
@@ -112,14 +114,14 @@ object streamCount {
   def main(args: Array[String]) {
 
     // Checking input parameters
-    if (args.length != 2) {
-      System.err.println("USAGE:\nstreamCount <inputFile> <outputPath>")
-      return
-    }
-
-    val inputFilePath = args(0)
-    val outputFilePath= args(1)
-    val numOfParallelism=4
+//    if (args.length != 2) {
+//      System.err.println("USAGE:\nstreamCount <inputFile> <outputPath>")
+//      return
+//    }
+//
+//    val inputFilePath = args(0)
+//    val outputFilePath= args(1)
+    val numOfParallelism= Runtime.getRuntime.availableProcessors
 
     // set up the execution environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -127,12 +129,18 @@ object streamCount {
     // make parameters available in the web interface
 //    env.getConfig.setGlobalJobParameters(params)
 
+    val Bash_proc=new ProcessBuilder("bash","./clear.sh")
+    Bash_proc.start()
+
+    val Python_proc = new ProcessBuilder("python","./server.py")
+    Python_proc.start()
+
     // get input data
 //    val text =env.readTextFile(inputFilePath)
-    val text = env.socketTextStream("localhost", 9999)
+    val text = env.socketTextStream("localhost", 6666)
 
 //    val rd=new Random(123)
-    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%(2*numOfParallelism)+2*numOfParallelism+1)
+    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%numOfParallelism+1)
 //    def  g(k:String,v:Int)=Tuple3(k,v,v%4+1)
 
 
@@ -142,12 +150,22 @@ object streamCount {
       .filter(_.nonEmpty)
 
       .map{(_, 1)}
-//      .map{x=>g(x._1,x._2)}
       .keyBy(0)
-      .timeWindow(Time.seconds(1))
+      .timeWindow(Time.seconds(3))
+//      .map{x=>g(x._1,x._2)}
+//      .map{x=>g(x._1,x._2)}
+//        .timeWindowAll(Time.seconds(3))
+//      .windowAll(TumblingEventTimeWindows.of(Time.seconds(1)))
       .sum(1)
+//      .reduce{(v1, v2) => (v1._1, v1._2 + v2._2)}
       .map{x=>g(x._1,x._2)}
+
+
       .keyBy(_._3)
+      //      .keyBy(0)
+//      .sum(1)
+
+
 //////      .mapWithState((in: (String, Int), count: Option[Int]) =>
 //////        count match {
 //////          case Some(c) => ( (in._1, c), Some(c + in._2-threshold) )
@@ -160,7 +178,7 @@ object streamCount {
 
 
 //      counts.print()
-    counts.writeAsText(outputFilePath)
+      counts.writeAsText("./output")
 
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
