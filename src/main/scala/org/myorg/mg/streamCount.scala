@@ -26,15 +26,15 @@ import scala.util.hashing.Hashing
 import org.apache.flink.api.scala.typeutils
 
 import scala.util.Random
+import java.util.Calendar
 
-
-class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, Int, Int)]] {
+class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String,List[(String, Int, Int)])] {
 
   //  sum(Key=>(count,total_decrement))
   private var sum:MapState[String, (Int, Int)]=null
   private var timeInMillis=System.currentTimeMillis()
 
-  override def flatMap(input: (String, Int, Int ), out: Collector[List[(String, Int, Int)]]): Unit = {
+  override def flatMap(input: (String, Int, Int ), out: Collector[(String,List[(String, Int, Int)])]): Unit = {
 
     //Update map using new input
     if (sum.contains(input._1)) {
@@ -50,7 +50,7 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
     val k=2500                   //number of items kept in map
     val frequentThreshold=0      //judge whether a word is frequent
-    val time_interval=1000       //time interval for every collection (milliseconds)
+    val time_interval=3000       //time interval for every collection (milliseconds)
     var count=Int.MaxValue
 
     while(count>k){
@@ -92,9 +92,18 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
 
       //collect top 10 frequent words
-      if (!storedElems_sorted.isEmpty ) {
-        print(input._3)
-        out.collect(storedElems_sorted.take(10))
+      if (!storedElems_sorted.isEmpty  ) {
+//        print(input._3)
+        val now=Calendar.getInstance()
+        val currentTime=now.get(Calendar.YEAR).toString+"/"+
+          now.get(Calendar.MONTH).toString+"/"+
+          now.get(Calendar.DATE)+" "+
+          now.get(Calendar.HOUR_OF_DAY)+":"+
+          now.get(Calendar.MINUTE)+":"+
+          now.get(Calendar.SECOND)
+
+          out.collect((currentTime, storedElems_sorted.take(20)))
+
       }
     }
 
@@ -112,35 +121,41 @@ class CountWindow extends RichFlatMapFunction[(String, Int, Int), List[(String, 
 
 object streamCount {
   def main(args: Array[String]) {
-
+    var inputFilePath=""
+    var outputFilePath=""
     // Checking input parameters
-//    if (args.length != 2) {
+    if (args.length == 2) {
 //      System.err.println("USAGE:\nstreamCount <inputFile> <outputPath>")
 //      return
-//    }
-//
-//    val inputFilePath = args(0)
-//    val outputFilePath= args(1)
-    val numOfParallelism= Runtime.getRuntime.availableProcessors
+       inputFilePath = args(0)
+       outputFilePath= args(1)
+    }
+    else{
+      inputFilePath="/home/xiong/IdeaProjects/parallelMG/input/wiki.train.tokens"
+      outputFilePath="/home/xiong/IdeaProjects/parallelMG/output"
+    }
 
+
+//    val numOfParallelism= Runtime.getRuntime.availableProcessors
+    val numOfParallelism=32
     // set up the execution environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setParallelism(numOfParallelism)
+//    env.setParallelism(numOfParallelism)
     // make parameters available in the web interface
 //    env.getConfig.setGlobalJobParameters(params)
 
     val Bash_proc=new ProcessBuilder("bash","./clear.sh")
     Bash_proc.start()
 
-    val Python_proc = new ProcessBuilder("python","./server.py")
-    Python_proc.start()
+//    val Python_proc = new ProcessBuilder("python","./server.py")
+//    Python_proc.start()s
 
     // get input data
-//    val text =env.readTextFile(inputFilePath)
-    val text = env.socketTextStream("localhost", 6666)
+    val text =env.readTextFile(inputFilePath)
+//    val text = env.socketTextStream("localhost", 6666)
 
 //    val rd=new Random(123)
-    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%numOfParallelism+1)
+    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%numOfParallelism)
 //    def  g(k:String,v:Int)=Tuple3(k,v,v%4+1)
 
 
@@ -151,7 +166,7 @@ object streamCount {
 
       .map{(_, 1)}
       .keyBy(0)
-      .timeWindow(Time.seconds(3))
+      .timeWindow(Time.seconds(1))
 //      .map{x=>g(x._1,x._2)}
 //      .map{x=>g(x._1,x._2)}
 //        .timeWindowAll(Time.seconds(3))
@@ -178,7 +193,7 @@ object streamCount {
 
 
 //      counts.print()
-      counts.writeAsText("./output")
+//      counts.writeAsText(outputFilePath)
 
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
