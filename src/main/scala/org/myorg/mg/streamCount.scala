@@ -28,119 +28,131 @@ import org.apache.flink.api.scala.typeutils
 import scala.util.Random
 import java.util.Calendar
 
-class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String,List[(String, Int, Int)])] {
-
-  //  sum(Key=>(count,total_decrement))
-  private var sum:MapState[String, (Int, Int)]=null
-  private var timeInMillis=System.currentTimeMillis()
-
-  override def flatMap(input: (String, Int, Int ), out: Collector[(String,List[(String, Int, Int)])]): Unit = {
-
-    //Update map using new input
-    if (sum.contains(input._1)) {
-      val tmp_sum=sum.get(input._1)
-      sum.remove(input._1)
-      sum.put(input._1,(tmp_sum._1+input._2,tmp_sum._2))
-
-    }
-    else {
-      sum.put(input._1,(input._2,0))
-    }
-
-
-    val k=2500                   //number of items kept in map
-    val frequentThreshold=0      //judge whether a word is frequent
-    val time_interval=3000       //time interval for every collection (milliseconds)
-    var count=Int.MaxValue
-
-    while(count>k){
-      count=0
-      var i=sum.iterator()
-      while(i.hasNext){
-        i.next()
-        count+=1
-      }
-      i=sum.iterator()
-      if(count>k){
-        while(i.hasNext){
-          val e=i.next
-          if(e.getValue._1>1){
-            e.setValue(e.getValue._1-1,e.getValue._2+1)
-          }
-          else{
-            i.remove()
-          }
-        }
-      }
-
-    }
-
-    if( System.currentTimeMillis()-timeInMillis>time_interval) {
-      timeInMillis = System.currentTimeMillis()
-      var storedElems: List[(String, Int, Int)] = Nil
-      val i = sum.iterator()
-      while (i.hasNext) {
-        val e = i.next()
-        //only put enough frequent words into list
-        if (e.getValue._1 > frequentThreshold) {
-          storedElems = storedElems.::(e.getKey, e.getValue._1, e.getValue._2)
-        }
-
-      }
-
-      val storedElems_sorted = storedElems.sortBy(_._2)(Ordering[Int].reverse)
-
-
-      //collect top 10 frequent words
-      if (!storedElems_sorted.isEmpty  ) {
-//        print(input._3)
-        val now=Calendar.getInstance()
-        val currentTime=now.get(Calendar.YEAR).toString+"/"+
-          now.get(Calendar.MONTH).toString+"/"+
-          now.get(Calendar.DATE)+" "+
-          now.get(Calendar.HOUR_OF_DAY)+":"+
-          now.get(Calendar.MINUTE)+":"+
-          now.get(Calendar.SECOND)
-
-          out.collect((currentTime, storedElems_sorted.take(20)))
-
-      }
-    }
+import org.apache.flink.core.fs
 
 
 
-  }
-
-  override def open(parameters: Configuration): Unit = {
-    sum = getRuntimeContext.getMapState[String,(Int, Int)](
-      new MapStateDescriptor[String,(Int, Int)]("count",createTypeInformation[String],createTypeInformation[(Int,Int)]))
-
-  }
-}
 
 
 object streamCount {
+  var numOfMaps=128 //num of maps kept in state
+  class CountWindow extends RichFlatMapFunction[(String, Int, Int), (String,List[(String, Int, Int)])] {
+
+    //  sum(Key=>(count,total_decrement))
+    private var sum:MapState[String, (Int, Int)]=null
+    private var timeInMillis=System.currentTimeMillis()
+
+    override def flatMap(input: (String, Int, Int ), out: Collector[(String,List[(String, Int, Int)])]): Unit = {
+
+      //Update map using new input
+      if (sum.contains(input._1)) {
+        val tmp_sum=sum.get(input._1)
+        sum.remove(input._1)
+        sum.put(input._1,(tmp_sum._1+input._2,tmp_sum._2))
+
+      }
+      else {
+        sum.put(input._1,(input._2,0))
+      }
+
+
+      val k=10000/numOfMaps                  //number of items kept in map
+      val frequentThreshold=0      //judge whether a word is frequent
+      val time_interval=3000       //time interval for every collection (milliseconds)
+      var count=Int.MaxValue
+
+      while(count>k){
+        count=0
+        var i=sum.iterator()
+        while(i.hasNext){
+          i.next()
+          count+=1
+        }
+        i=sum.iterator()
+        if(count>k){
+          while(i.hasNext){
+            val e=i.next
+            if(e.getValue._1>1){
+              e.setValue(e.getValue._1-1,e.getValue._2+1)
+            }
+            else{
+              i.remove()
+            }
+          }
+        }
+
+      }
+
+      if( System.currentTimeMillis()-timeInMillis>time_interval) {
+        timeInMillis = System.currentTimeMillis()
+        var storedElems: List[(String, Int, Int)] = Nil
+        val i = sum.iterator()
+        while (i.hasNext) {
+          val e = i.next()
+          //only put enough frequent words into list
+          if (e.getValue._1 > frequentThreshold) {
+            storedElems = storedElems.::(e.getKey, e.getValue._1, e.getValue._2)
+          }
+
+        }
+
+        val storedElems_sorted = storedElems.sortBy(_._2)(Ordering[Int].reverse)
+
+
+        //collect top 20 frequent words
+        if (!storedElems_sorted.isEmpty  ) {
+          //        print(input._3)
+          val now=Calendar.getInstance()
+          val currentTime=now.get(Calendar.YEAR).toString+"/"+
+            now.get(Calendar.MONTH).toString+"/"+
+            now.get(Calendar.DATE)+" "+
+            now.get(Calendar.HOUR_OF_DAY)+":"+
+            now.get(Calendar.MINUTE)+":"+
+            now.get(Calendar.SECOND)
+          out.collect((currentTime, storedElems_sorted.take(20)))
+
+        }
+      }
+
+
+
+    }
+
+    override def open(parameters: Configuration): Unit = {
+      sum = getRuntimeContext.getMapState[String,(Int, Int)](
+        new MapStateDescriptor[String,(Int, Int)]("count",createTypeInformation[String],createTypeInformation[(Int,Int)]))
+
+    }
+  }
+
   def main(args: Array[String]) {
     var inputFilePath=""
     var outputFilePath=""
+    var numOfParallelism=4
     // Checking input parameters
-    if (args.length == 2) {
+    if (args.length == 3) {
 //      System.err.println("USAGE:\nstreamCount <inputFile> <outputPath>")
 //      return
        inputFilePath = args(0)
        outputFilePath= args(1)
+       numOfParallelism=args(2).toInt
+//       numOfMaps=args(3).toInt
     }
     else{
       inputFilePath="/home/xiong/IdeaProjects/parallelMG/input/wiki.train.tokens"
+//      inputFilePath="/home/xiong/wiki.train.tokens"
       outputFilePath="/home/xiong/IdeaProjects/parallelMG/output"
     }
 
 
-//    val numOfParallelism= Runtime.getRuntime.availableProcessors
-    val numOfParallelism=32
+
+
+
+    //    val numOfParallelism= Runtime.getRuntime.availableProcessors
+
     // set up the execution environment
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-//    env.setParallelism(numOfParallelism)
+    env.setParallelism(numOfParallelism)
     // make parameters available in the web interface
 //    env.getConfig.setGlobalJobParameters(params)
 
@@ -155,7 +167,7 @@ object streamCount {
 //    val text = env.socketTextStream("localhost", 6666)
 
 //    val rd=new Random(123)
-    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%numOfParallelism)
+    def  g(k:String,v:Int)=Tuple3(k,v,Math.abs(Hashing.default.hash(k))%numOfMaps)
 //    def  g(k:String,v:Int)=Tuple3(k,v,v%4+1)
 
 
@@ -193,7 +205,7 @@ object streamCount {
 
 
 //      counts.print()
-//      counts.writeAsText(outputFilePath)
+//      counts.writeAsText(outputFilePath,fs.FileSystem.WriteMode.OVERWRITE)
 
 //    val tableEnv = TableEnvironment.getTableEnvironment(env)
 //    val table1: Table = tableEnv.fromDataStream(counts)
